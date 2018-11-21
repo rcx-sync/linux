@@ -11,6 +11,7 @@
 
 #include <linux/fs.h>
 #include <linux/mm.h>
+#include <linux/mmap_lock.h>
 #include <linux/cpu.h>
 #include <linux/smp.h>
 #include <linux/idr.h>
@@ -8788,7 +8789,7 @@ static void perf_event_addr_filters_apply(struct perf_event *event)
 	if (!mm)
 		goto restart;
 
-	down_read(&mm->mmap_sem);
+	mmap_read_lock(mm);
 
 	raw_spin_lock_irqsave(&ifh->lock, flags);
 	list_for_each_entry(filter, &ifh->list, entry) {
@@ -8808,7 +8809,7 @@ static void perf_event_addr_filters_apply(struct perf_event *event)
 	event->addr_filters_gen++;
 	raw_spin_unlock_irqrestore(&ifh->lock, flags);
 
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 
 	mmput(mm);
 

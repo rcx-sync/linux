@@ -33,6 +33,7 @@
 #include <linux/file.h>
 #include <linux/anon_inodes.h>
 #include <linux/sched/mm.h>
+#include <linux/mmap_lock.h>
 #include <rdma/ib_verbs.h>
 #include <rdma/uverbs_types.h>
 #include <linux/rcupdate.h>
@@ -825,9 +826,9 @@ static void ufile_disassociate_ucontext(struct ib_ucontext *ibcontext)
 		}
 	}
 
-	down_write(&owning_mm->mmap_sem);
+	mmap_write_lock(owning_mm);
 	ib_dev->disassociate_ucontext(ibcontext);
-	up_write(&owning_mm->mmap_sem);
+	mmap_write_unlock(owning_mm);
 	mmput(owning_mm);
 	put_task_struct(owning_process);
 }

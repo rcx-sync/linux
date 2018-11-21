@@ -25,6 +25,7 @@
 #include <linux/dmar.h>
 #include <linux/interrupt.h>
 #include <linux/mm_types.h>
+#include <linux/mmap_lock.h>
 #include <asm/page.h>
 
 #include "intel-pasid.h"
@@ -628,7 +629,7 @@ static irqreturn_t prq_event_thread(int irq, void *d)
 		if (!is_canonical_address(address))
 			goto bad_req;
 
-		down_read(&svm->mm->mmap_sem);
+		mmap_read_lock(svm->mm);
 		vma = find_extend_vma(svm->mm, address);
 		if (!vma || address < vma->vm_start)
 			goto invalid;
@@ -643,7 +644,7 @@ static irqreturn_t prq_event_thread(int irq, void *d)
 
 		result = QI_RESP_SUCCESS;
 	invalid:
-		up_read(&svm->mm->mmap_sem);
+		mmap_read_unlock(svm->mm);
 		mmput(svm->mm);
 	bad_req:
 		/* Accounting for major/minor faults? */

@@ -238,4 +238,8 @@ config RCU_NOCB_CPU
 	  Say Y here if you want to help to debug reduced OS jitter.
 	  Say N here if you are unsure.
 
+config RCX_SLEEPABLE
+	bool "RCX critical section can go to sleep"
+	default y
+
 endmenu # "RCU Subsystem"

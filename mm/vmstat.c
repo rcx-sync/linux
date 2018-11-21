@@ -1291,6 +1291,29 @@ const char * const vmstat_text[] = {
 	"swap_ra",
 	"swap_ra_hit",
 #endif
+#ifdef CONFIG_SPF
+	"speculative_pgfault",
+#endif
+	"mmap_region",
+	"mmap_region_unmap_old",
+	"mmap_region_merged",
+	"mmap_vma_link_rb",
+	"mmap_vma_rb_erase",
+	"mprotect_simple_fail",
+	"mprotect",
+	"mprotect_inside",
+	"mprotect_leftinside",
+	"mprotect_rightinside",
+	"mprotect_leftout",
+	"mprotect_rightout",
+	"mprotect_merged",
+	"mprotect_start_split",
+	"mprotect_end_split",
+	"mprotect_merge_case1",
+	"mprotect_merge_case2",
+	"mprotect_merge_case3",
+	"mprotect_merge_case4",
+	"mprotect_pkey_meaningless",
 #endif /* CONFIG_VM_EVENTS_COUNTERS */
 };
 #endif /* CONFIG_PROC_FS || CONFIG_SYSFS || CONFIG_NUMA */

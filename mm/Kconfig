@@ -764,4 +764,16 @@ config GUP_BENCHMARK
 config ARCH_HAS_PTE_SPECIAL
 	bool
 
+config MMAP_RWSEM
+	bool "Use rwsem for mmap synchronization"
+	default y
+
+config MMAP_RCX
+	bool "Use rcxlock for mmap synchronization"
+	default n
+
+config MMAP_SPINLOCK
+	bool "Use spinlock for mmap synchronization"
+	default n
+
 endmenu

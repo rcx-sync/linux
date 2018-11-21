@@ -40,6 +40,7 @@
 
 #include <linux/kernel_stat.h>
 #include <linux/mm.h>
+#include <linux/mmap_lock.h>
 #include <linux/sched/mm.h>
 #include <linux/sched/coredump.h>
 #include <linux/sched/numa_balancing.h>
@@ -1468,7 +1469,7 @@ static inline unsigned long zap_pud_range(struct mmu_gather *tlb,
 		next = pud_addr_end(addr, end);
 		if (pud_trans_huge(*pud) || pud_devmap(*pud)) {
 			if (next - addr != HPAGE_PUD_SIZE) {
-				VM_BUG_ON_VMA(!rwsem_is_locked(&tlb->mm->mmap_sem), vma);
+				VM_BUG_ON_VMA(!mmap_is_locked(tlb->mm), vma);
 				split_huge_pud(vma, pud, addr);
 			} else if (zap_huge_pud(tlb, vma, pud, addr))
 				goto next;
@@ -1771,7 +1772,7 @@ int vm_insert_page(struct vm_area_struct *vma, unsigned long addr,
 	if (!page_count(page))
 		return -EINVAL;
 	if (!(vma->vm_flags & VM_MIXEDMAP)) {
-		BUG_ON(down_read_trylock(&vma->vm_mm->mmap_sem));
+		BUG_ON(mmap_read_trylock(vma->vm_mm));
 		BUG_ON(vma->vm_flags & VM_PFNMAP);
 		vma->vm_flags |= VM_MIXEDMAP;
 	}
@@ -4268,11 +4269,6 @@ static vm_fault_t __handle_mm_fault(struct vm_area_struct *vma,
 
 #ifdef CONFIG_SPF
 
-#ifndef __HAVE_ARCH_PTE_SPECIAL
-/* This is required by vm_normal_page() */
-#error "Speculative page fault handler requires __HAVE_ARCH_PTE_SPECIAL"
-#endif
-
 /*
  * vm_normal_page() adds some processing which should be done while
  * hodling the mmap_sem.
@@ -4455,15 +4451,18 @@ int handle_speculative_fault(struct mm_struct *mm, unsigned long address,
 		goto unlock;
 	}
 
-	mem_cgroup_oom_enable();
+	mem_cgroup_enter_user_fault();
 	ret = handle_pte_fault(&vmf);
-	mem_cgroup_oom_disable();
+	mem_cgroup_exit_user_fault();
 
 	/*
 	 * There is no more need to hold SRCU since the VMA pointer is no more
 	 * used. Release it right now to avoid longer SRCU grace period.
 	 */
 	srcu_read_unlock(&vma_srcu, idx);
+
+	if (ret != VM_FAULT_RETRY)
+		count_vm_event(SPECULATIVE_PGFAULT);
 
 	/*
 	 * The task may have entered a memcg OOM situation but

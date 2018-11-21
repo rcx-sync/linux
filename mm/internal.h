@@ -49,7 +49,7 @@ extern struct vm_area_struct *find_vma_srcu(struct mm_struct *mm,
 static inline bool vma_has_changed(struct vm_fault *vmf)
 {
 	int ret = RB_EMPTY_NODE(&vmf->vma->vm_rb);
-	unsigned seq = ACCESS_ONCE(vmf->vma->vm_sequence.sequence);
+	unsigned seq = READ_ONCE(vmf->vma->vm_sequence.sequence);
 
 	/*
 	 * Matches both the wmb in write_seqlock_{begin,end}() and

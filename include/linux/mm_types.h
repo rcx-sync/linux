@@ -15,6 +15,8 @@
 #include <linux/page-flags-layout.h>
 #include <linux/workqueue.h>
 
+#include <linux/rcx.h>
+
 #include <asm/mmu.h>
 
 #ifndef AT_VECTOR_SIZE_ARCH
@@ -326,6 +328,7 @@ struct vm_area_struct {
 #ifdef CONFIG_SPF
 	seqcount_t vm_sequence;
 #endif
+	struct rcxlock vm_rcx;
 	struct rcu_head vm_rcu_head;
 } __randomize_layout;
 
@@ -495,6 +498,11 @@ struct mm_struct {
 #if IS_ENABLED(CONFIG_HMM)
 		/* HMM needs to track a few things per mm */
 		struct hmm *hmm;
+#endif
+#ifdef CONFIG_MMAP_RCX
+		struct rcxlock mm_rcx;
+#elif defined(CONFIG_MMAP_SPINLOCK)
+		spinlock_t mm_spinlock;
 #endif
 	} __randomize_layout;
 

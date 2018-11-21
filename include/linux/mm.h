@@ -1463,24 +1463,29 @@ static inline void unmap_shared_mapping_range(struct address_space *mapping,
 #ifdef CONFIG_SPF
 static inline void vm_write_begin(struct vm_area_struct *vma)
 {
+	rcx_lock(&vma->vm_rcx);
 	write_seqcount_begin(&vma->vm_sequence);
 }
 static inline void vm_write_begin_nested(struct vm_area_struct *vma,
 					 int subclass)
 {
+	rcx_lock(&vma->vm_rcx);
 	write_seqcount_begin_nested(&vma->vm_sequence, subclass);
 }
 static inline void vm_write_end(struct vm_area_struct *vma)
 {
 	write_seqcount_end(&vma->vm_sequence);
+	rcx_unlock(&vma->vm_rcx);
 }
 static inline void vm_raw_write_begin(struct vm_area_struct *vma)
 {
+	rcx_lock(&vma->vm_rcx);
 	raw_write_seqcount_begin(&vma->vm_sequence);
 }
 static inline void vm_raw_write_end(struct vm_area_struct *vma)
 {
 	raw_write_seqcount_end(&vma->vm_sequence);
+	rcx_unlock(&vma->vm_rcx);
 }
 #else
 static inline void vm_write_begin(struct vm_area_struct *vma)
@@ -2286,6 +2291,10 @@ static inline int vma_adjust(struct vm_area_struct *vma, unsigned long start,
 {
 	return __vma_adjust(vma, start, end, pgoff, insert, NULL);
 }
+extern struct vm_area_struct *simple_vma_merge(struct mm_struct *,
+	struct vm_area_struct *prev, unsigned long addr, unsigned long end,
+	unsigned long vm_flags, struct anon_vma *, struct file *, pgoff_t,
+	struct mempolicy *, struct vm_userfaultfd_ctx);
 extern struct vm_area_struct *vma_merge(struct mm_struct *,
 	struct vm_area_struct *prev, unsigned long addr, unsigned long end,
 	unsigned long vm_flags, struct anon_vma *, struct file *, pgoff_t,

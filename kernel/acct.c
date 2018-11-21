@@ -45,6 +45,7 @@
  */
 
 #include <linux/mm.h>
+#include <linux/mmap_lock.h>
 #include <linux/slab.h>
 #include <linux/acct.h>
 #include <linux/capability.h>
@@ -539,13 +540,13 @@ void acct_collect(long exitcode, int group_dead)
 	if (group_dead && current->mm) {
 		struct vm_area_struct *vma;
 
-		down_read(&current->mm->mmap_sem);
+		mmap_read_lock(current->mm);
 		vma = current->mm->mmap;
 		while (vma) {
 			vsize += vma->vm_end - vma->vm_start;
 			vma = vma->vm_next;
 		}
-		up_read(&current->mm->mmap_sem);
+		mmap_read_unlock(current->mm);
 	}
 
 	spin_lock_irq(&current->sighand->siglock);

@@ -37,5 +37,10 @@ struct mm_struct init_mm = {
 	.mmlist		= LIST_HEAD_INIT(init_mm.mmlist),
 	.user_ns	= &init_user_ns,
 	.cpu_bitmap	= { [BITS_TO_LONGS(NR_CPUS)] = 0},
+#ifdef CONFIG_MMAP_RCX
+	.mm_rcx		= __RCXLOCK_UNLOCKED(init_mm.mm_rcx),
+#elif defined(CONFIG_MMAP_SPINLOCK)
+	.mm_spinlock	= __SPIN_LOCK_UNLOCKED(init_mm.mm_spinlock),
+#endif
 	INIT_MM_CONTEXT(init_mm)
 };

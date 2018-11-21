@@ -19,6 +19,7 @@
 #include <linux/mmu_notifier.h>
 #include <linux/amd-iommu.h>
 #include <linux/mm_types.h>
+#include <linux/mmap_lock.h>
 #include <linux/profile.h>
 #include <linux/module.h>
 #include <linux/sched.h>
@@ -522,7 +523,7 @@ static void do_fault(struct work_struct *work)
 		flags |= FAULT_FLAG_WRITE;
 	flags |= FAULT_FLAG_REMOTE;
 
-	down_read(&mm->mmap_sem);
+	mmap_read_lock(mm);
 	vma = find_extend_vma(mm, address);
 	if (!vma || address < vma->vm_start)
 		/* failed to get a vma in the right range */
@@ -534,7 +535,7 @@ static void do_fault(struct work_struct *work)
 
 	ret = handle_mm_fault(vma, address, flags);
 out:
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 
 	if (ret & VM_FAULT_ERROR)
 		/* failed to service fault */

@@ -28,6 +28,7 @@
 #include <linux/sched.h>
 #include <linux/list_lru.h>
 #include <linux/ratelimit.h>
+#include <linux/mmap_lock.h>
 #include <asm/cacheflush.h>
 #include "binder_alloc.h"
 #include "binder_trace.h"
@@ -223,7 +224,7 @@ static int binder_update_page_range(struct binder_alloc *alloc, int allocate,
 		mm = alloc->vma_vm_mm;
 
 	if (mm) {
-		down_read(&mm->mmap_sem);
+		mmap_read_lock(mm);
 		vma = alloc->vma;
 	}
 
@@ -293,7 +294,7 @@ static int binder_update_page_range(struct binder_alloc *alloc, int allocate,
 		/* vm_insert_page does not seem to increment the refcount */
 	}
 	if (mm) {
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 		mmput(mm);
 	}
 	return 0;
@@ -326,7 +327,7 @@ err_page_ptr_cleared:
 	}
 err_no_vma:
 	if (mm) {
-		up_read(&mm->mmap_sem);
+		mmap_read_unlock(mm);
 		mmput(mm);
 	}
 	return vma ? -ENOMEM : -ESRCH;
@@ -967,7 +968,7 @@ enum lru_status binder_alloc_free_page(struct list_head *item,
 		if (!mmget_not_zero(alloc->vma_vm_mm))
 			goto err_mmget;
 		mm = alloc->vma_vm_mm;
-		if (!down_write_trylock(&mm->mmap_sem))
+		if (!mmap_write_trylock(mm))
 			goto err_down_write_mmap_sem_failed;
 	}
 
@@ -983,7 +984,7 @@ enum lru_status binder_alloc_free_page(struct list_head *item,
 
 		trace_binder_unmap_user_end(alloc, index);
 
-		up_write(&mm->mmap_sem);
+		mmap_write_unlock(mm);
 		mmput(mm);
 	}
 

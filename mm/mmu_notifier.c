@@ -10,6 +10,7 @@
  */
 
 #include <linux/rculist.h>
+#include <linux/mmap_lock.h>
 #include <linux/mmu_notifier.h>
 #include <linux/export.h>
 #include <linux/mm.h>
@@ -257,7 +258,7 @@ bool mm_has_blockable_invalidate_notifiers(struct mm_struct *mm)
 	int id;
 	bool ret = false;
 
-	WARN_ON_ONCE(!rwsem_is_locked(&mm->mmap_sem));
+	WARN_ON_ONCE(!mmap_is_locked(mm));
 
 	if (!mm_has_notifiers(mm))
 		return ret;
@@ -293,7 +294,7 @@ static int do_mmu_notifier_register(struct mmu_notifier *mn,
 		goto out;
 
 	if (take_mmap_sem)
-		down_write(&mm->mmap_sem);
+		mmap_write_lock(mm);
 	ret = mm_take_all_locks(mm);
 	if (unlikely(ret))
 		goto out_clean;
@@ -322,7 +323,7 @@ static int do_mmu_notifier_register(struct mmu_notifier *mn,
 	mm_drop_all_locks(mm);
 out_clean:
 	if (take_mmap_sem)
-		up_write(&mm->mmap_sem);
+		mmap_write_unlock(mm);
 	kfree(mmu_notifier_mm);
 out:
 	BUG_ON(atomic_read(&mm->mm_users) <= 0);

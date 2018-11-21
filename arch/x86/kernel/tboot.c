@@ -105,6 +105,11 @@ static struct mm_struct tboot_mm = {
 	.mm_users       = ATOMIC_INIT(2),
 	.mm_count       = ATOMIC_INIT(1),
 	.mmap_sem       = __RWSEM_INITIALIZER(init_mm.mmap_sem),
+#ifdef CONFIG_MMAP_RCX
+	.mm_rcx		= __RCXLOCK_UNLOCKED(init_mm.mm_rcx),
+#elif defined(CONFIG_MMAP_SPINLOCK)
+	.mm_spinlock	= __SPIN_LOCK_UNLOCKED(init_mm.page_table_lock),
+#endif
 	.page_table_lock =  __SPIN_LOCK_UNLOCKED(init_mm.page_table_lock),
 	.mmlist         = LIST_HEAD_INIT(init_mm.mmlist),
 };

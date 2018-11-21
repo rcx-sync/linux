@@ -25,6 +25,7 @@
 #include <linux/list.h>
 #include <linux/pagemap.h>
 #include <linux/sched/mm.h>
+#include <linux/mmap_lock.h>
 #include <drm/drmP.h>
 #include "amdgpu_object.h"
 #include "amdgpu_vm.h"
@@ -1363,9 +1364,9 @@ int amdgpu_amdkfd_gpuvm_map_memory_to_gpu(
 	 * concurrently and the queues are actually stopped
 	 */
 	if (amdgpu_ttm_tt_get_usermm(bo->tbo.ttm)) {
-		down_write(&current->mm->mmap_sem);
+		mmap_write_lock(current->mm);
 		is_invalid_userptr = atomic_read(&mem->invalid);
-		up_write(&current->mm->mmap_sem);
+		mmap_write_unlock(current->mm);
 	}
 
 	mutex_lock(&mem->lock);

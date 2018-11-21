@@ -28,6 +28,7 @@
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/mm.h>
+#include <linux/mmap_lock.h>
 #include <linux/io.h>
 #include <linux/spinlock.h>
 #include <linux/device.h>
@@ -148,7 +149,7 @@ static int gru_create_new_context(unsigned long arg)
 	if (!(req.options & GRU_OPT_MISS_MASK))
 		req.options |= GRU_OPT_MISS_FMM_INTR;
 
-	down_write(&current->mm->mmap_sem);
+	mmap_write_lock(current->mm);
 	vma = gru_find_vma(req.gseg);
 	if (vma) {
 		vdata = vma->vm_private_data;
@@ -159,7 +160,7 @@ static int gru_create_new_context(unsigned long arg)
 		vdata->vd_tlb_preload_count = req.tlb_preload_count;
 		ret = 0;
 	}
-	up_write(&current->mm->mmap_sem);
+	mmap_write_unlock(current->mm);
 
 	return ret;
 }

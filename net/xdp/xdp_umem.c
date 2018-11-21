@@ -11,6 +11,7 @@
 #include <linux/slab.h>
 #include <linux/bpf.h>
 #include <linux/mm.h>
+#include <linux/mmap_lock.h>
 #include <linux/netdevice.h>
 #include <linux/rtnetlink.h>
 
@@ -221,10 +222,10 @@ static int xdp_umem_pin_pages(struct xdp_umem *umem)
 	if (!umem->pgs)
 		return -ENOMEM;
 
-	down_write(&current->mm->mmap_sem);
+	mmap_write_lock(current->mm);
 	npgs = get_user_pages(umem->address, umem->npgs,
 			      gup_flags, &umem->pgs[0], NULL);
-	up_write(&current->mm->mmap_sem);
+	mmap_write_unlock(current->mm);
 
 	if (npgs != umem->npgs) {
 		if (npgs >= 0) {

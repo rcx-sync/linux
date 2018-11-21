@@ -8,6 +8,7 @@
  */
 
 #include <linux/hugetlb.h>
+#include <linux/mmap_lock.h>
 #include <linux/sched/mm.h>
 #include <asm/pnv-pci.h>
 #include <misc/cxllib.h>
@@ -211,7 +212,7 @@ static int get_vma_info(struct mm_struct *mm, u64 addr,
 	struct vm_area_struct *vma = NULL;
 	int rc = 0;
 
-	down_read(&mm->mmap_sem);
+	mmap_read_lock(mm);
 
 	vma = find_vma(mm, addr);
 	if (!vma) {
@@ -222,7 +223,7 @@ static int get_vma_info(struct mm_struct *mm, u64 addr,
 	*vma_start = vma->vm_start;
 	*vma_end = vma->vm_end;
 out:
-	up_read(&mm->mmap_sem);
+	mmap_read_unlock(mm);
 	return rc;
 }
 

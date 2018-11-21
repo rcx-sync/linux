@@ -10,6 +10,7 @@
  */
 
 #include <linux/mm.h>
+#include <linux/mmap_lock.h>
 #include <linux/hugetlb.h>
 #include <linux/shm.h>
 #include <linux/mman.h>
@@ -400,6 +401,7 @@ mprotect_fixup(struct vm_area_struct *vma, struct vm_area_struct **pprev,
 			   vma->anon_vma, vma->vm_file, pgoff, vma_policy(vma),
 			   vma->vm_userfaultfd_ctx);
 	if (*pprev) {
+		count_vm_event(MPROTECT_MERGED);
 		vma = *pprev;
 		VM_WARN_ON((vma->vm_flags ^ newflags) & ~VM_SOFTDIRTY);
 		goto success;
@@ -408,12 +410,14 @@ mprotect_fixup(struct vm_area_struct *vma, struct vm_area_struct **pprev,
 	*pprev = vma;
 
 	if (start != vma->vm_start) {
+		count_vm_event(MPROTECT_START_SPLIT);
 		error = split_vma(mm, vma, start, 1);
 		if (error)
 			goto fail;
 	}
 
 	if (end != vma->vm_end) {
+		count_vm_event(MPROTECT_END_SPLIT);
 		error = split_vma(mm, vma, end, 0);
 		if (error)
 			goto fail;
@@ -452,6 +456,184 @@ fail:
 	return error;
 }
 
+static int
+simple_mprotect_fixup(struct vm_area_struct *vma, struct vm_area_struct **pprev,
+	unsigned long start, unsigned long end, unsigned long newflags)
+{
+	struct mm_struct *mm = vma->vm_mm;
+	unsigned long oldflags = vma->vm_flags;
+	long nrpages = (end - start) >> PAGE_SHIFT;
+	unsigned long charged = 0;
+	pgoff_t pgoff;
+	int error;
+	int dirty_accountable = 0;
+
+	/*
+	 * Do PROT_NONE PFN permission checks here when we can still
+	 * bail out without undoing a lot of state. This is a rather
+	 * uncommon case, so doesn't need to be very optimized.
+	 */
+	if (arch_has_pfn_modify_check() &&
+	    (vma->vm_flags & (VM_PFNMAP|VM_MIXEDMAP)) &&
+	    (newflags & (VM_READ|VM_WRITE|VM_EXEC)) == 0) {
+		error = prot_none_walk(vma, start, end, newflags);
+		if (error)
+			return error;
+	}
+
+	/*
+	 * If we make a private mapping writable we increase our commit;
+	 * but (without finer accounting) cannot reduce our commit if we
+	 * make it unwritable again. hugetlb mapping were accounted for
+	 * even if read-only so there is no need to account for them here
+	 */
+	if (newflags & VM_WRITE) {
+		/* Check space limits when area turns into data. */
+		if (!may_expand_vm(mm, newflags, nrpages) &&
+				may_expand_vm(mm, oldflags, nrpages))
+			return -ENOMEM;
+		if (!(oldflags & (VM_ACCOUNT|VM_WRITE|VM_HUGETLB|
+						VM_SHARED|VM_NORESERVE))) {
+			charged = nrpages;
+			if (security_vm_enough_memory_mm(mm, charged))
+				return -ENOMEM;
+			newflags |= VM_ACCOUNT;
+		}
+	}
+
+	/*
+	 * First try to merge with previous and/or next vma.
+	 */
+	pgoff = vma->vm_pgoff + ((start - vma->vm_start) >> PAGE_SHIFT);
+	*pprev = simple_vma_merge(mm, *pprev, start, end, newflags,
+			   vma->anon_vma, vma->vm_file, pgoff, vma_policy(vma),
+			   vma->vm_userfaultfd_ctx);
+	if (!*pprev) {
+		error = -EINVAL;
+		goto fail;
+	}
+	count_vm_event(MPROTECT_MERGED);
+	vma = *pprev;
+	VM_WARN_ON((vma->vm_flags ^ newflags) & ~VM_SOFTDIRTY);
+
+	/*
+	 * vm_flags and vm_page_prot are protected by the mmap_sem
+	 * held in write mode.
+	 */
+	vm_write_begin(vma);
+	WRITE_ONCE(vma->vm_flags, newflags);
+	dirty_accountable = vma_wants_writenotify(vma, vma->vm_page_prot);
+	vma_set_page_prot(vma);
+
+	change_protection(vma, start, end, vma->vm_page_prot,
+			  dirty_accountable, 0);
+
+	/*
+	 * Private VM_LOCKED VMA becoming writable: trigger COW to avoid major
+	 * fault on access.
+	 */
+	if ((oldflags & (VM_WRITE | VM_SHARED | VM_LOCKED)) == VM_LOCKED &&
+			(newflags & VM_WRITE)) {
+		populate_vma_page_range(vma, start, end, NULL);
+	}
+	vm_write_end(vma);
+
+	vm_stat_account(mm, oldflags, -nrpages);
+	vm_stat_account(mm, newflags, nrpages);
+	perf_event_mmap(vma);
+	return 0;
+
+fail:
+	vm_unacct_memory(charged);
+	return error;
+}
+
+static int simple_mprotect_pkey(unsigned long start, size_t len,
+		unsigned long prot, int pkey)
+{
+	unsigned long end, reqprot;
+	struct vm_area_struct *vma, *prev;
+	int error = -EINVAL;
+	const int grows = prot & (PROT_GROWSDOWN|PROT_GROWSUP);
+	const bool rier = (current->personality & READ_IMPLIES_EXEC) &&
+				(prot & PROT_READ);
+	unsigned long mask_off_old_flags;
+	unsigned long newflags;
+	int new_vma_pkey;
+	int idx;
+
+	count_vm_event(MPROTECT_CALL);
+
+	if (pkey != -1)
+		return -EINVAL;
+	if (grows)
+		return -EINVAL;
+
+	if (start & ~PAGE_MASK)
+		return -EINVAL;
+	if (!len)
+		return 0;
+	len = PAGE_ALIGN(len);
+	end = start + len;
+	if (end <= start)
+		return -ENOMEM;
+
+	prot &= ~(PROT_GROWSDOWN|PROT_GROWSUP);
+	if (!arch_validate_prot(prot, start))
+		return -EINVAL;
+
+	reqprot = prot;
+
+	idx = srcu_read_lock(&vma_srcu);
+
+	vma = find_vma_srcu(current->mm, start);
+
+	error = -ENOMEM;
+	/* We deal with the case 5 only (See comment of merge_vma()) */
+	if (!vma || vma->vm_start != start || end >= vma->vm_end)
+		goto out;
+
+	prev = vma->vm_prev;
+	if (!prev || prev->vm_end != vma->vm_start)
+		goto out;
+
+	/* Does the application expect PROT_READ to imply PROT_EXEC */
+	if (rier && (vma->vm_flags & VM_MAYEXEC))
+		prot |= PROT_EXEC;
+
+	/*
+	 * Each mprotect() call explicitly passes r/w/x permissions.
+	 * If a permission is not passed to mprotect(), it must be
+	 * cleared from the VMA.
+	 */
+	mask_off_old_flags = VM_READ | VM_WRITE | VM_EXEC |
+				VM_FLAGS_CLEAR;
+
+	new_vma_pkey = arch_override_mprotect_pkey(vma, prot, pkey);
+	newflags = calc_vm_prot_bits(prot, new_vma_pkey);
+	newflags |= (vma->vm_flags & ~mask_off_old_flags);
+
+	/* newflags >> 4 shift VM_MAY% in place of VM_% */
+	if ((newflags & ~(newflags >> 4)) & (VM_READ | VM_WRITE | VM_EXEC)) {
+		error = -EACCES;
+		goto out;
+	}
+
+	error = security_file_mprotect(vma, reqprot, prot);
+	if (error)
+		goto out;
+
+	if (newflags == vma->vm_flags)
+		goto out;
+
+	/* We know that end is smaller than vma->vm_end */
+	error = simple_mprotect_fixup(vma, &prev, start, end, newflags);
+
+out:
+	srcu_read_unlock(&vma_srcu, idx);
+	return error;
+}
+
 /*
  * pkey==-1 when doing a legacy mprotect()
  */
@@ -464,6 +646,14 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 	const int grows = prot & (PROT_GROWSDOWN|PROT_GROWSUP);
 	const bool rier = (current->personality & READ_IMPLIES_EXEC) &&
 				(prot & PROT_READ);
+
+	if (!simple_mprotect_pkey(start, len, prot, pkey))
+		return 0;
+	count_vm_event(MPROTECT_SIMPLE_FAIL);
+
+	count_vm_event(MPROTECT_CALL);
+	if (pkey == -1)
+		count_vm_event(MPROTECT_PKEY_MEANINGLESS);
 
 	prot &= ~(PROT_GROWSDOWN|PROT_GROWSUP);
 	if (grows == (PROT_GROWSDOWN|PROT_GROWSUP)) /* can't be both */
@@ -482,7 +672,7 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 
 	reqprot = prot;
 
-	if (down_write_killable(&current->mm->mmap_sem))
+	if (mmap_write_lock_killable(current->mm))
 		return -EINTR;
 
 	/*
@@ -494,9 +684,21 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 		goto out;
 
 	vma = find_vma(current->mm, start);
+
 	error = -ENOMEM;
 	if (!vma)
 		goto out;
+	if (vma->vm_start <= start && end <= vma->vm_end)
+		count_vm_event(MPROTECT_INSIDE);
+	else if (vma->vm_start > start)
+		count_vm_event(MPROTECT_RIGHTOUTSIDE);
+	else
+		count_vm_event(MPROTECT_LEFTOUTSIDE);
+	if (vma->vm_start == start)
+		count_vm_event(MPROTECT_LEFTINSIDE);
+	if (end == vma->vm_end)
+		count_vm_event(MPROTECT_RIGHTINSIDE);
+
 	prev = vma->vm_prev;
 	if (unlikely(grows & PROT_GROWSDOWN)) {
 		if (vma->vm_start >= end)
@@ -572,7 +774,7 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 		prot = reqprot;
 	}
 out:
-	up_write(&current->mm->mmap_sem);
+	mmap_write_unlock(current->mm);
 	return error;
 }
 
@@ -602,7 +804,7 @@ SYSCALL_DEFINE2(pkey_alloc, unsigned long, flags, unsigned long, init_val)
 	if (init_val & ~PKEY_ACCESS_MASK)
 		return -EINVAL;
 
-	down_write(&current->mm->mmap_sem);
+	mmap_write_lock(current->mm);
 	pkey = mm_pkey_alloc(current->mm);
 
 	ret = -ENOSPC;
@@ -616,7 +818,7 @@ SYSCALL_DEFINE2(pkey_alloc, unsigned long, flags, unsigned long, init_val)
 	}
 	ret = pkey;
 out:
-	up_write(&current->mm->mmap_sem);
+	mmap_write_unlock(current->mm);
 	return ret;
 }
 
@@ -624,9 +826,9 @@ SYSCALL_DEFINE1(pkey_free, int, pkey)
 {
 	int ret;
 
-	down_write(&current->mm->mmap_sem);
+	mmap_write_lock(current->mm);
 	ret = mm_pkey_free(current->mm, pkey);
-	up_write(&current->mm->mmap_sem);
+	mmap_write_unlock(current->mm);
 
 	/*
 	 * We could provie warnings or errors if any VMA still
